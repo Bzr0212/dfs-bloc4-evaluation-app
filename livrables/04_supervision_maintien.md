@@ -56,7 +56,7 @@ J'ai prévu le script `scripts/backup.sh`, exécuté quotidiennement à 03h00 pa
 | Base MySQL `opstrack` | `mysqldump` compressé | `/var/backups/opstrack/mysql_YYYYMMDD_HHMM.sql.gz` |
 | Base MongoDB `opstrack_logs` | `mongodump --archive --gzip` | `/var/backups/opstrack/mongo_YYYYMMDD_HHMM.archive.gz` |
 | Fichiers applicatifs téléversés | `tar czf storage/app/public` | `/var/backups/opstrack/storage_YYYYMMDD_HHMM.tar.gz` |
-
+![Backup exécuté, 3 fichiers dans /var/backups/opstrack/](captures/backup_exec.png)
 La rétention locale est fixée à 7 jours. À terme, les sauvegardes seront répliquées hors site vers Amazon S3, avec chiffrement KMS et une règle de cycle de vie vers Glacier après 90 jours.
 
 Un test de restauration MySQL a été validé sur une base de test isolée :
