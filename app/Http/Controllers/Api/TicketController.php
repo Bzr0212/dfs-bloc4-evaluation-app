@@ -22,8 +22,10 @@ class TicketController extends Controller
         $query = Ticket::query()->with(['site', 'openedBy', 'assignedTo', 'interventions']);
 
         if ($search = $request->string('search')->toString()) {
-            $query->where('title', 'like', "%{$search}%")
-                ->orWhereRaw("reference like '%{$search}%'");
+            $query->where(function ($q) use ($search) {
+                $q->where('title', 'like', "%{$search}%")
+                ->orWhere('reference', 'like', "%{$search}%");
+            });
         }
 
         if ($priority = $request->string('priority')->toString()) {

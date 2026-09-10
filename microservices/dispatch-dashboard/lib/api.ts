@@ -15,5 +15,5 @@ export async function fetchTickets() {
   }
 
   const payload = await response.json();
-  return payload.items ?? [];
+  return payload.data ?? [];
 }
