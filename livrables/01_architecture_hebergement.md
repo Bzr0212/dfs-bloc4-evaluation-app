@@ -1,7 +1,5 @@
 # Livrable 01 — Architecture cible et hébergement
 
-**Compétence évaluée** : C29 (Sélectionner une plateforme d'hébergement adaptée aux exigences techniques, économiques, qualitatives et réglementaires)
-
 **Application** : OpsTrack Field Service
 **Candidat** : Thélia Beauzor
 **Date** : 10 septembre 2026
@@ -23,42 +21,32 @@ Hypothèses de charge à 18 mois :
 
 ## 2. Diagramme d'architecture cible
 
-```
-                            Internet
-                                │
-                                ▼
-                    ┌────────────────────────┐
-                    │  Route 53 (DNS + WAF)  │
-                    │  + CloudFront (CDN)    │
-                    └───────────┬────────────┘
-                                │
-                    ┌───────────▼────────────┐
-                    │   ALB (Application     │
-                    │   Load Balancer)       │
-                    └─────┬──────────────┬───┘
-                          │              │
-                  ┌───────▼──────┐ ┌─────▼─────────┐
-                  │ EC2 Auto     │ │ Vercel        │
-                  │ Scaling      │ │ (Next.js      │
-                  │ Group        │ │ dispatch-     │
-                  │ (Laravel/PHP)│ │  dashboard)   │
-                  └──┬────┬──────┘ └───────┬───────┘
-                     │    │                │
-                     │    │   VPC privé    │
-    ┌────────────────▼────▼────────────────▼────────────┐
-    │                                                    │
-    │  ┌───────────┐  ┌───────────┐  ┌──────────────┐  │
-    │  │ RDS MySQL │  │ ElastiCache│  │ MongoDB      │  │
-    │  │ Multi-AZ  │  │ Redis HA   │  │ Atlas (via   │  │
-    │  │           │  │            │  │ PrivateLink) │  │
-    │  └───────────┘  └───────────┘  └──────────────┘  │
-    │                                                    │
-    │        Secrets Manager  •  S3 (backups + uploads)  │
-    │                                                    │
-    └────────────────────────────────────────────────────┘
 
-Observabilité : CloudWatch + CloudTrail + Datadog (option)
-CI/CD : GitHub Actions → CodeDeploy → EC2 ASG
+```mermaid
+flowchart TB
+    Internet[Internet] --> Route53[Route 53 DNS + WAF]
+    Route53 --> CDN[CloudFront CDN]
+    CDN --> ALB[Application Load Balancer]
+
+    ALB --> ASG[EC2 Auto Scaling Group<br/>Laravel + PHP-FPM]
+    ALB --> Vercel[Vercel<br/>Next.js dispatch-dashboard]
+
+    subgraph VPC[VPC privé eu-west-3]
+        ASG --> RDS[(RDS MySQL Multi-AZ)]
+        ASG --> Redis[(ElastiCache Redis HA)]
+        ASG --> Mongo[(MongoDB Atlas<br/>via PrivateLink)]
+        Vercel -.-> ASG
+        ASG --> Secrets[Secrets Manager]
+        ASG --> S3[S3 backups + uploads]
+    end
+
+    subgraph Obs[Observabilité]
+        CloudWatch[CloudWatch + CloudTrail]
+        Datadog[Datadog en option]
+    end
+
+    ASG -.-> CloudWatch
+    RDS -.-> CloudWatch
 ```
 
 ## 3. Choix de la plateforme
@@ -120,14 +108,6 @@ Motifs :
 
 RTO cible : 1h. RPO cible : 15 minutes.
 
-## 8. Supervision
-
-- **CloudWatch** : métriques infrastructure (CPU, RAM, IOPS, latence ALB), logs applicatifs (Laravel + Nginx + PHP-FPM), alarmes SNS → Slack équipe ops
-- **Health check ALB** sur `/api/health` toutes les 30s, sortie de rotation automatique si 3 échecs consécutifs
-- **CloudTrail** : traçabilité de toute action API AWS
-- **Datadog** (option Growth) : APM Laravel (traces, requêtes N+1), monitoring Vercel unifié, dashboards custom par tenant
-- **Alertes prioritaires** : 5xx > 1% sur 5min, latence P95 > 1s, échec de connexion DB, remplissage disque > 80%
-
 ## 9. Conformité RGPD
 
 - **Résidence des données** : eu-west-3 pour AWS, région Paris pour MongoDB Atlas, région iad1 évitée sur Vercel (edge FR privilégié)
@@ -137,16 +117,8 @@ RTO cible : 1h. RPO cible : 15 minutes.
 - **Registre des traitements** : maintenu par le DPO, mis à jour à chaque évolution fonctionnelle impactant les données personnelles
 - **Sous-traitants** : liste tenue à jour et accessible aux clients dans le contrat, notification 30 jours avant tout ajout
 
-## 10. Chaîne CI/CD (haut niveau, détaillée au livrable 03)
 
-- **Source** : GitHub, branche `main` pour prod, `develop` pour qualif
-- **Build** : GitHub Actions (composer install, tests unitaires PHPUnit, lint PHPStan, build assets Vite)
-- **Artefact** : archive versionnée poussée sur S3
-- **Déploiement qualif** : automatique sur push `develop`, via CodeDeploy sur l'ASG qualif
-- **Déploiement prod** : manuel après validation qualif, blue/green deploy, smoke test post-déploiement, rollback un clic
-- **Microservice Next.js** : déploiement Vercel géré par leur intégration GitHub native (preview branch + prod)
-
-## 11. Chiffrage annuel indicatif
+## 10. Chiffrage annuel indicatif
 
 Dimensionnement early phase (2 EC2 t3.medium, RDS db.t3.small Multi-AZ, ElastiCache cache.t3.small, MongoDB Atlas M10, S3 modéré, trafic 200 Go/mois) :
 
@@ -165,7 +137,7 @@ Dimensionnement early phase (2 EC2 t3.medium, RDS db.t3.small Multi-AZ, ElastiCa
 
 Scaling attendu jusqu'à ~15 000 €/an à charge cible (200 tenants). Le poste principal de croissance sera RDS (montée en gamme d'instance et lecture replica).
 
-## 12. Ce qui n'est pas en place aujourd'hui
+## 11. Ce qui n'est pas en place aujourd'hui
 
 Cette architecture est projective. L'environnement de production actuel (contrainte imposée par le sujet) repose sur une seule instance EC2 avec Apache, MySQL, MongoDB et Redis en colocalisation. Les écarts documentés :
 
