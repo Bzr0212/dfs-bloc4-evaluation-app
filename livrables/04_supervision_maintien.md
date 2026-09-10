@@ -56,7 +56,7 @@ J'ai prévu le script `scripts/backup.sh`, exécuté quotidiennement à 03h00 pa
 | Base MySQL `opstrack` | `mysqldump` compressé | `/var/backups/opstrack/mysql_YYYYMMDD_HHMM.sql.gz` |
 | Base MongoDB `opstrack_logs` | `mongodump --archive --gzip` | `/var/backups/opstrack/mongo_YYYYMMDD_HHMM.archive.gz` |
 | Fichiers applicatifs téléversés | `tar czf storage/app/public` | `/var/backups/opstrack/storage_YYYYMMDD_HHMM.tar.gz` |
-![Backup exécuté, 3 fichiers dans /var/backups/opstrack/](captures/backup_exec.png)
+
 La rétention locale est fixée à 7 jours. À terme, les sauvegardes seront répliquées hors site vers Amazon S3, avec chiffrement KMS et une règle de cycle de vie vers Glacier après 90 jours.
 
 Un test de restauration MySQL a été validé sur une base de test isolée :
@@ -141,15 +141,42 @@ Les corrections ci-dessous sont documentées en détail dans `02_exploitation_se
 - l'absence de HTTPS a été corrigée par un certificat auto-signé et une redirection permanente HTTP vers HTTPS ;
 - UFW, auparavant inactif, a été activé avec une politique restrictive : refus entrant par défaut et ouverture des seuls ports `22`, `80` et `443`.
 
+### 4.6 Bug corrigé — Webhook sans déduplication
+
+**Symptôme :** chaque appel du webhook `hooks.php` avec le même `external_event_id` créait une nouvelle intervention en base, provoquant des doublons.
+
+**Cause :** `WebhookController::handle()` utilisait `Intervention::query()->create([...])` sans vérifier l'existence préalable d'une intervention avec le même `external_event_id`.
+
+**Correctif :** j'ai remplacé la création systématique par `Intervention::query()->updateOrCreate(['external_event_id' => ...], [...])` lorsqu'un `external_event_id` est fourni. En l'absence de cet identifiant, une création simple est conservée.
+
+**Validation :** deux appels successifs du même webhook avec `external_event_id=ext_abc123` ne créent plus qu'une seule intervention : le second appel met à jour la première.
+
+### 4.7 Bug corrigé — Webhook forçait le statut à `scheduled`
+
+**Symptôme :** après un appel webhook, le statut du ticket était systématiquement `scheduled`, quel que soit le statut envoyé dans le payload. Cela créait un écart entre l'état externe et l'état enregistré en base.
+
+**Cause :** `WebhookController::handle()` contenait l'instruction `$ticket->update(['status' => 'scheduled'])`, avec une valeur écrite en dur.
+
+**Correctif :** j'ai remplacé cette instruction par `$ticket->update(['status' => $payload['status']])` afin de refléter le statut réellement transmis.
+
+**Validation :** un webhook avec `status=in_progress` positionne bien le ticket sur `in_progress`. Le résultat a été vérifié par `curl` et par inspection de la base MySQL.
+
+### 4.8 Bug corrigé — Cache dashboard non invalidé
+
+**Symptôme :** les compteurs du tableau de bord (`openTickets`, `criticalTickets`, `scheduledToday`, `technicians`) restaient figés jusqu'à 30 minutes après une modification de ticket.
+
+**Cause :** `DashboardController` utilisait `Cache::remember('dashboard.kpis', now()->addMinutes(30), ...)` sans invalidation lors des écritures sur le modèle `Ticket`.
+
+**Correctif :** j'ai créé `App\Observers\TicketObserver` avec les méthodes `saved()` et `deleted()`, qui appellent `Cache::forget('dashboard.kpis')`. L'observer est enregistré dans `AppServiceProvider::boot()` avec `Ticket::observe(TicketObserver::class)`.
+
+**Validation :** après la création d'un ticket via l'API, le prochain accès au dashboard reflète immédiatement le nouveau compteur.
+
 ## 5. Défauts identifiés et non corrigés dans ce livrable
 
 Les défauts suivants sont documentés pour une correction lors de la maintenance planifiée :
 
 | Défaut | Priorité | Traitement recommandé |
 |---|---|---|
-| Cache dashboard KPI de 30 minutes sans invalidation (`DashboardController`) | Moyenne | Ajouter `Cache::forget('dashboard.kpis')` dans `TicketObserver@saved` et `TicketObserver@deleted`. |
-| Webhook sans déduplication sur `external_event_id` | Haute | Utiliser `Intervention::firstOrCreate(['external_event_id' => ...], [...])`. |
-| Webhook qui force `status = scheduled` sur toute mise à jour | Haute | Utiliser `$payload['status']` plutôt que la valeur `'scheduled'` écrite en dur. |
 | API avec token global, sans permissions par ressource | Moyenne | Passer à Sanctum abilities ou à des scopes Laravel Passport. |
 | Webhook `hooks.php` avec Basic Auth seul, sans HMAC | Haute | Ajouter la vérification d'une signature HMAC-SHA256 dans l'en-tête `X-Signature`. |
 | `.env.example` contenant des identifiants de démonstration | Basse | Remplacer les valeurs par des placeholders `changeme` et ajouter une note dans le README. |
@@ -163,6 +190,9 @@ Le sujet demande explicitement le traitement d'un bug et d'une faille de sécuri
 | 2026-09-10 | security | Correction de l'injection SQL dans `TicketController@index` : remplacement de `orWhereRaw` par `orWhere` dans une closure. |
 | 2026-09-10 | bugfix | Correction de la logique de recherche de tickets combinée au filtre de priorité. |
 | 2026-09-10 | bugfix | Correction du dashboard Next.js vide : `payload.items` remplacé par `payload.data`. |
+| 2026-09-10 | bugfix | Ajout de la déduplication du webhook par `external_event_id` avec `updateOrCreate`. |
+| 2026-09-10 | bugfix | Correction du statut ticket transmis par le webhook : utilisation de `$payload['status']`. |
+| 2026-09-10 | bugfix | Invalidation du cache `dashboard.kpis` via `TicketObserver`. |
 | 2026-09-10 | ops | Ajout de la stratégie de backup quotidien MySQL, MongoDB et storage. |
 | 2026-09-10 | security | Correction des droits du fichier `.env` : `644` vers `640`. |
 | 2026-09-10 | security | Passage de `APP_ENV` à `production` et de `APP_DEBUG` à `false`. |
