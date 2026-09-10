@@ -32,17 +32,28 @@ class WebhookController extends Controller
 
         $ticket = Ticket::query()->where('reference', $payload['ticket_reference'])->firstOrFail();
 
-        $intervention = Intervention::query()->create([
-            'ticket_id' => $ticket->id,
-            'scheduled_for' => now()->addHour(),
-            'status' => $payload['status'],
-            'summary' => $payload['summary'] ?? 'Webhook update received.',
-            'external_event_id' => $payload['external_event_id'] ?? null,
-        ]);
+               if (!empty($payload['external_event_id'])) {
+            $intervention = Intervention::query()->updateOrCreate(
+                ['external_event_id' => $payload['external_event_id']],
+                [
+                    'ticket_id' => $ticket->id,
+                    'scheduled_for' => now()->addHour(),
+                    'status' => $payload['status'],
+                    'summary' => $payload['summary'] ?? 'Webhook update received.',
+                ]
+            );
+        } else {
+            $intervention = Intervention::query()->create([
+                'ticket_id' => $ticket->id,
+                'scheduled_for' => now()->addHour(),
+                'status' => $payload['status'],
+                'summary' => $payload['summary'] ?? 'Webhook update received.',
+                'external_event_id' => null,
+            ]);
+        }
 
-        // Intentional defect for the assessment: webhook processing acknowledges
-        // the external status but leaves the ticket in a scheduled state.
-        $ticket->update(['status' => 'scheduled']);
+        // Correctif : refléter le vrai statut externe au lieu de forcer 'scheduled'
+        $ticket->update(['status' => $payload['status']]);
 
         $this->eventLogService->record('webhook', 'intervention.synced', [
             'ticket_id' => $ticket->id,
